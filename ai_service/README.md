@@ -14,7 +14,7 @@ brew install tesseract
 
 ## 2. Установка зависимостей
 ```bash
-cd /Users/setuper/Desktop/UNI/3.2/arp/MemeHub/ai_service
+cd /Users/setuper/Desktop/MemeHub/ai_service
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -50,3 +50,17 @@ curl -X POST http://localhost:8000/process \
 - Подключить реальную LLM (Qwen 2.5) вместо заглушки `_simple_tags_emotion`.
 - Добавить очередь (Kafka) и асинхронную обработку.
 - Упаковать в Docker для деплоя.
+
+## 7. Включение Qwen 2.5 локально (Mac M1)
+По умолчанию используется заглушка. Чтобы включить LLM:
+
+```bash
+export USE_LLM=1
+export QWEN_MODEL=Qwen/Qwen2.5-0.5B-Instruct
+python3 main.py
+```
+
+Первый запуск скачает модель (занимает время и место).
+
+Если хочешь крупнее:
+- `Qwen/Qwen2.5-1.5B-Instruct` (медленнее, больше память).

@@ -63,6 +63,88 @@ def _simple_tags_emotion(text: str) -> Tuple[List[str], str]:
     return tags, emotion
 
 
+_LLM_PIPE = None
+
+
+def _get_llm_pipe():
+    global _LLM_PIPE  # noqa: PLW0603
+    if _LLM_PIPE is not None:
+        return _LLM_PIPE
+
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "LLM зависимости не установлены. Установи: "
+                "pip install -r requirements.txt"
+            ),
+        ) from exc
+
+    model_name = os.getenv("QWEN_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+    model = AutoModelForCausalLM.from_pretrained(model_name)
+
+    _LLM_PIPE = pipeline(
+        "text-generation",
+        model=model,
+        tokenizer=tokenizer,
+        device=device,
+    )
+    return _LLM_PIPE
+
+
+def _llm_tags_emotion(text: str) -> Tuple[List[str], str]:
+    # Пытаемся получить JSON от модели, при неудаче падаем на заглушку.
+    if not text.strip():
+        return _simple_tags_emotion(text)
+
+    pipe = _get_llm_pipe()
+    prompt = (
+        "Ты помощник для тегирования мемов. "
+        "Верни ТОЛЬКО JSON без пояснений. "
+        "Формат: {\"tags\": [\"tag1\", \"tag2\"], \"emotion\": \"joy|sadness|anger|neutral\"}.\n"
+        f"Текст мема:\n{text}\n"
+    )
+
+    try:
+        out = pipe(
+            prompt,
+            max_new_tokens=120,
+            do_sample=False,
+            temperature=0.0,
+        )[0]["generated_text"]
+    except Exception:
+        return _simple_tags_emotion(text)
+
+    # Вытаскиваем JSON из ответа.
+    start = out.find("{")
+    end = out.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return _simple_tags_emotion(text)
+
+    raw = out[start : end + 1]
+    try:
+        import json
+
+        payload = json.loads(raw)
+        tags = payload.get("tags") or []
+        emotion = payload.get("emotion") or "neutral"
+        if not isinstance(tags, list):
+            tags = []
+        if not isinstance(emotion, str):
+            emotion = "neutral"
+        if not tags:
+            tags = ["meme"]
+        return tags, emotion
+    except Exception:
+        return _simple_tags_emotion(text)
+
+
 def _load_image_from_bytes(data: bytes) -> Image.Image:
     try:
         return Image.open(io.BytesIO(data)).convert("RGB")
@@ -99,7 +181,11 @@ async def process(
         image = await _fetch_image(str(body.image_url))
 
     ocr_text = _ocr_image(image)
-    tags, emotion = _simple_tags_emotion(ocr_text)
+    use_llm = os.getenv("USE_LLM", "0") == "1"
+    if use_llm:
+        tags, emotion = _llm_tags_emotion(ocr_text)
+    else:
+        tags, emotion = _simple_tags_emotion(ocr_text)
 
     return ProcessResponse(ocr_text=ocr_text.strip(), tags=tags, emotion=emotion)
 
