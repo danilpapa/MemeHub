@@ -1,0 +1,2 @@
+fn(State<AppState>, Method, axum::extract::Path<String>, HeaderMap, axum::body::Body, Uri) -> impl Future<Output = impl IntoResponse> {proxy_ai}
+fn(State<AppState>, Method, axum::extract::Path<String>, HeaderMap, axum::body::Body, Uri) -> impl Future<Output = impl IntoResponse> {proxy_ai}: Handler<_, _>
