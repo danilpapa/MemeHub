@@ -29,3 +29,7 @@ venv/
 *.sqlite
 *.db
 .tmp/
+
+# Rust
+target
+gateway/target/
