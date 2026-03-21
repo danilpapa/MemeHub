@@ -1,0 +1,1 @@
+{"timestamp":"2026-03-21T06:34:47.000362Z","level":"INFO","fields":{"message":"request","method":"GET","path":"/health","status":"200","elapsed_sec":0.000047625},"target":"gateway"}

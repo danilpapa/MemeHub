@@ -15,5 +15,7 @@ services:
       - AI_SERVICE_URL=http://ai_service:8000
     ports:
       - "8080:8080"
+    volumes:
+      - ./gateway/logs:/app/logs
     depends_on:
       - ai_service
