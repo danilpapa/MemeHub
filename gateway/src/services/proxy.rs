@@ -35,6 +35,7 @@ impl ProxyService {
             path,
             query_string
         );
+
         let mut builder = self.client.request(
             method.clone(),
             &url
