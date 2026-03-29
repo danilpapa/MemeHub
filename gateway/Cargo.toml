@@ -10,6 +10,11 @@ reqwest = { version = "0.12", features = ["json", "gzip", "brotli", "deflate"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
-tower-http = { version = "0.5", features = ["trace"] }
 metrics = "0.23"
 metrics-exporter-prometheus = "0.15"
+http = "1"
+tower-http = { version = "0.5", features = ["trace", "request-id"] }
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic", "trace"] }
+tracing-opentelemetry = "0.28"

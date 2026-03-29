@@ -1,5 +1,4 @@
 use reqwest::Client;
-use tracing_subscriber::fmt::writer::MakeWriterExt;
 use crate::app::app::create_app;
 use crate::Models::AppState::AppState;
 use crate::services::proxy::ProxyService;
@@ -14,10 +13,12 @@ mod app;
 
 #[tokio::main]
 async fn main() {
-    let _guard = observability::logging::init_logging();
-    let metrics = observability::metrics::init_metrics();
-
     let config = config::Config::from_env();
+    let _guard = observability::logging::init_logging(
+        &config.service_name,
+        &config.otlp_endpoint,
+    );
+    let metrics = observability::metrics::init_metrics();
     let client = Client::new();
 
     let proxy = ProxyService::new(client, config.ai_base);
