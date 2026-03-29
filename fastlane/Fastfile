@@ -1,0 +1,7 @@
+fastlane_version "2.228.0"
+
+desc "Build validation for CI"
+lane :build_ci do
+  sh("cargo check --manifest-path gateway/Cargo.toml")
+  sh("docker compose build ai_service gateway")
+end
