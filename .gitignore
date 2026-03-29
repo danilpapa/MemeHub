@@ -33,3 +33,4 @@ venv/
 # Rust
 target
 gateway/target/
+gateway/logs/

@@ -1,7 +1,9 @@
 use axum::body::Body;
-use axum::http::{HeaderMap, Request, Response, StatusCode};
-use axum::response::IntoResponse;
+use axum::http::{HeaderMap, Request, StatusCode};
+use axum::response::{IntoResponse, Response as AxumResponse};
 use reqwest::Client;
+use tower_http::request_id::RequestId;
+use tracing::{Instrument, error, info, info_span};
 
 #[derive(Clone)]
 pub struct ProxyService {
@@ -15,10 +17,10 @@ impl ProxyService {
     }
 
     pub async fn forward(
-        self,
+        &self,
         path: String,
         req: Request<Body>,
-    ) -> impl IntoResponse {
+    ) -> AxumResponse {
         let (parts, body) = req.into_parts();
 
         let method = parts
@@ -28,12 +30,24 @@ impl ProxyService {
         let query_string = parts.uri.query()
             .map(|query| format!("?{query}"))
             .unwrap_or_else(String::new);
+        let request_id = parts
+            .extensions
+            .get::<RequestId>()
+            .and_then(|request_id| request_id.header_value().to_str().ok())
+            .unwrap_or("unknown")
+            .to_string();
 
         let url = format!(
             "{}/{}{}",
             self.base_url,
             path,
             query_string
+        );
+        let upstream_span = info_span!(
+            "proxy_upstream",
+            request_id = %request_id,
+            upstream_url = %url,
+            upstream_method = %method,
         );
 
         let mut builder = self.client.request(
@@ -51,21 +65,29 @@ impl ProxyService {
         let bytes = axum::body::to_bytes(body, usize::MAX)
             .await
             .unwrap_or_default();
+        async move {
+            info!("forwarding request to upstream");
 
-        let resp = match builder.body(bytes).send().await {
-            Ok(response) => response,
-            Err(_) => {
-                return (StatusCode::BAD_GATEWAY, "upstream error").into_response()
+            let resp = match builder.body(bytes).send().await {
+                Ok(response) => response,
+                Err(error) => {
+                    error!(error = %error, "upstream request failed");
+                    return (StatusCode::BAD_GATEWAY, "upstream error").into_response()
+                }
+            };
+
+            let status = resp.status();
+            let mut out_headers = HeaderMap::new();
+            for (k, v) in resp.headers() {
+                out_headers.insert(k, v.clone());
             }
-        };
+            let body = resp.bytes().await.unwrap_or_default();
 
-        let status = resp.status();
-        let mut out_headers = HeaderMap::new();
-        for (k, v) in resp.headers() {
-            out_headers.insert(k, v.clone());
+            info!(upstream_status = status.as_u16(), response_size = body.len(), "upstream response received");
+
+            (status, out_headers, body).into_response()
         }
-        let body = resp.bytes().await.unwrap_or_default();
-
-        (status, out_headers, body).into_response()
+        .instrument(upstream_span)
+        .await
     }
 }
