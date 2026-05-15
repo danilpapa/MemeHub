@@ -1,13 +1,17 @@
 FROM rust:1.88-slim as builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
     pkg-config \
+    libcurl4-openssl-dev \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY migrations ./migrations
 
 RUN cargo build --release
 

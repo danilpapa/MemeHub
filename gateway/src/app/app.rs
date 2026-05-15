@@ -1,10 +1,11 @@
 use std::time::Duration;
 use axum::{extract::MatchedPath, middleware, Router};
 use axum::http::Request;
-use axum::routing::{any, get};
+use axum::routing::{any, get, post};
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::{DefaultOnFailure, TraceLayer};
 use tracing::{Level, Span, field};
+use crate::handlers::jobs::{enqueue_analysis, get_job};
 use crate::handlers::metrics::metrics;
 use crate::handlers::proxy::proxy_ai;
 use crate::middleware::metrics::metrics_middleware;
@@ -15,6 +16,8 @@ const REQUEST_ID_HEADER: &str = "x-request-id";
 pub fn create_app(state: AppState) -> Router {
     Router::new()
         .route("/metrics", get(metrics))
+        .route("/ai/process", post(enqueue_analysis))
+        .route("/ai/jobs/:job_id", get(get_job))
         .route("/ai/*path", any(proxy_ai))
         .layer(
             TraceLayer::new_for_http()
@@ -62,6 +65,7 @@ pub fn create_app(state: AppState) -> Router {
             http::HeaderName::from_static(REQUEST_ID_HEADER),
             MakeRequestUuid,
         ))
-        .layer(middleware::from_fn(metrics_middleware))
+        // route_layer gives middleware access to MatchedPath (template like /ai/jobs/:job_id)
+        .route_layer(middleware::from_fn(metrics_middleware))
         .with_state(state)
 }

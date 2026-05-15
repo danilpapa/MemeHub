@@ -18,3 +18,13 @@ opentelemetry = "0.27"
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic", "trace"] }
 tracing-opentelemetry = "0.28"
+base64 = "0.22"
+futures-util = "0.3"
+multer = "3"
+rdkafka = { version = "0.36", features = ["cmake-build"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
+aws-sdk-s3 = "1"
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "tls-native-tls", "migrate"] }

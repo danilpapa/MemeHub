@@ -1,16 +1,78 @@
 from __future__ import annotations
 
 import io
+import asyncio
+import base64
+import json
 import os
-from typing import List, Optional, Tuple
+import time
+from typing import Any, List, Literal, Optional, Tuple, Union
 
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 import httpx
 import pytesseract
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from pydantic import BaseModel, HttpUrl
+from prometheus_fastapi_instrumentator import Instrumentator
+from pydantic import BaseModel, Field, HttpUrl
 from PIL import Image
 
 app = FastAPI(title="MemeHub AI Processing Service", version="0.1.0")
+
+Instrumentator(
+    should_group_status_codes=False,
+    should_ignore_untemplated=True,
+    should_instrument_requests_inprogress=True,
+).instrument(app).expose(app)
+
+_CLICKHOUSE_URL = (
+    f"http://{os.getenv('CLICKHOUSE_HOST', 'clickhouse')}:"
+    f"{os.getenv('CLICKHOUSE_PORT', '8123')}"
+)
+
+_CREATE_EVENTS_TABLE = """
+CREATE TABLE IF NOT EXISTS meme_events (
+    job_id       String,
+    tags         Array(String),
+    emotion      String,
+    ocr_length   UInt32,
+    processing_ms UInt32,
+    created_at   DateTime DEFAULT now()
+) ENGINE = MergeTree()
+ORDER BY created_at
+"""
+
+
+async def _init_clickhouse() -> None:
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(_CLICKHOUSE_URL, content=_CREATE_EVENTS_TABLE.encode())
+    except Exception:
+        pass
+
+
+async def _send_analytics(
+    job_id: str,
+    tags: List[str],
+    emotion: str,
+    ocr_len: int,
+    processing_ms: int,
+) -> None:
+    try:
+        row = json.dumps({
+            "job_id": job_id,
+            "tags": tags,
+            "emotion": emotion,
+            "ocr_length": ocr_len,
+            "processing_ms": processing_ms,
+        })
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                _CLICKHOUSE_URL,
+                params={"query": "INSERT INTO meme_events FORMAT JSONEachRow"},
+                content=row.encode(),
+            )
+    except Exception:
+        pass
 
 
 class ProcessRequest(BaseModel):
@@ -21,6 +83,30 @@ class ProcessResponse(BaseModel):
     ocr_text: str
     tags: List[str]
     emotion: str
+
+
+class FileImageSource(BaseModel):
+    type: Literal["file"]
+    filename: Optional[str] = None
+    content_type: Optional[str] = None
+    data_base64: str
+
+
+class UrlImageSource(BaseModel):
+    type: Literal["url"]
+    image_url: str
+
+
+class AnalysisRequestedEvent(BaseModel):
+    job_id: str
+    image: Union[FileImageSource, UrlImageSource] = Field(discriminator="type")
+
+
+class AnalysisCompletedEvent(BaseModel):
+    job_id: str
+    status: Literal["completed", "failed"]
+    result: Optional[ProcessResponse] = None
+    error: Optional[str] = None
 
 
 def _ocr_image(image: Image.Image) -> str:
@@ -165,6 +251,128 @@ async def _fetch_image(url: str) -> Image.Image:
         return _load_image_from_bytes(resp.content)
 
 
+async def _analyze_image(image: Image.Image) -> ProcessResponse:
+    ocr_text = _ocr_image(image)
+    use_llm = os.getenv("USE_LLM", "0") == "1"
+    if use_llm:
+        tags, emotion = _llm_tags_emotion(ocr_text)
+    else:
+        tags, emotion = _simple_tags_emotion(ocr_text)
+
+    return ProcessResponse(ocr_text=ocr_text.strip(), tags=tags, emotion=emotion)
+
+
+async def _image_from_event(source: Union[FileImageSource, UrlImageSource]) -> Image.Image:
+    if isinstance(source, UrlImageSource):
+        return await _fetch_image(source.image_url)
+
+    try:
+        data = base64.b64decode(source.data_base64)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail="Некорректный base64 файла") from exc
+
+    return _load_image_from_bytes(data)
+
+
+def _kafka_settings() -> tuple[str, str, str]:
+    bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:19092")
+    requested_topic = os.getenv(
+        "KAFKA_ANALYSIS_REQUESTED_TOPIC",
+        "meme.analysis.requested",
+    )
+    completed_topic = os.getenv(
+        "KAFKA_ANALYSIS_COMPLETED_TOPIC",
+        "meme.analysis.completed",
+    )
+    return bootstrap_servers, requested_topic, completed_topic
+
+
+async def _publish_completed(
+    producer: AIOKafkaProducer,
+    completed_topic: str,
+    event: AnalysisCompletedEvent,
+) -> None:
+    payload = event.model_dump_json().encode("utf-8")
+    await producer.send_and_wait(
+        completed_topic,
+        value=payload,
+        key=event.job_id.encode("utf-8"),
+    )
+
+
+async def _consume_analysis_requests() -> None:
+    bootstrap_servers, requested_topic, completed_topic = _kafka_settings()
+    consumer = AIOKafkaConsumer(
+        requested_topic,
+        bootstrap_servers=bootstrap_servers,
+        group_id="ai-service-analysis",
+        enable_auto_commit=True,
+        auto_offset_reset="earliest",
+    )
+    producer = AIOKafkaProducer(bootstrap_servers=bootstrap_servers)
+
+    await consumer.start()
+    await producer.start()
+    try:
+        async for message in consumer:
+            try:
+                payload: dict[str, Any] = json.loads(message.value.decode("utf-8"))
+                event = AnalysisRequestedEvent.model_validate(payload)
+                image = await _image_from_event(event.image)
+                t0 = time.monotonic()
+                result = await _analyze_image(image)
+                processing_ms = int((time.monotonic() - t0) * 1000)
+                completed = AnalysisCompletedEvent(
+                    job_id=event.job_id,
+                    status="completed",
+                    result=result,
+                )
+                asyncio.create_task(_send_analytics(
+                    job_id=event.job_id,
+                    tags=result.tags,
+                    emotion=result.emotion,
+                    ocr_len=len(result.ocr_text),
+                    processing_ms=processing_ms,
+                ))
+            except Exception as exc:  # noqa: BLE001
+                job_id = "unknown"
+                try:
+                    payload = json.loads(message.value.decode("utf-8"))
+                    job_id = str(payload.get("job_id", "unknown"))
+                except Exception:  # noqa: BLE001
+                    pass
+
+                completed = AnalysisCompletedEvent(
+                    job_id=job_id,
+                    status="failed",
+                    error=str(exc),
+                )
+
+            await _publish_completed(producer, completed_topic, completed)
+    finally:
+        await consumer.stop()
+        await producer.stop()
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    await _init_clickhouse()
+    app.state.kafka_task = asyncio.create_task(_consume_analysis_requests())
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    task = getattr(app.state, "kafka_task", None)
+    if task is None:
+        return
+
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
@@ -184,14 +392,7 @@ async def process(
     else:
         image = await _fetch_image(str(body.image_url))
 
-    ocr_text = _ocr_image(image)
-    use_llm = os.getenv("USE_LLM", "0") == "1"
-    if use_llm:
-        tags, emotion = _llm_tags_emotion(ocr_text)
-    else:
-        tags, emotion = _simple_tags_emotion(ocr_text)
-
-    return ProcessResponse(ocr_text=ocr_text.strip(), tags=tags, emotion=emotion)
+    return await _analyze_image(image)
 
 
 if __name__ == "__main__":
