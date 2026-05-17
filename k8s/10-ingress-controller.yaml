@@ -1,0 +1,90 @@
+---
+# Nginx Ingress Controller - простой и работающий
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ingress-nginx
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-ingress-controller
+  namespace: ingress-nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-ingress
+  template:
+    metadata:
+      labels:
+        app: nginx-ingress
+    spec:
+      serviceAccountName: nginx-ingress
+      containers:
+      - name: nginx-ingress
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+          name: http
+        - containerPort: 443
+          name: https
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/conf.d
+      volumes:
+      - name: nginx-config
+        configMap:
+          name: nginx-config
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: ingress-nginx
+data:
+  default.conf: |
+    upstream gateway {
+      server gateway.memehub.svc.cluster.local:8080;
+    }
+
+    server {
+      listen 80;
+      server_name _;
+      client_max_body_size 100M;
+
+      location / {
+        proxy_pass http://gateway;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+      }
+    }
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-ingress
+  namespace: ingress-nginx
+spec:
+  type: LoadBalancer
+  selector:
+    app: nginx-ingress
+  ports:
+  - port: 80
+    targetPort: 80
+    name: http
+  - port: 443
+    targetPort: 443
+    name: https
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nginx-ingress
+  namespace: ingress-nginx

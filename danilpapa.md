@@ -355,3 +355,116 @@ kubectl top pods -n memehub
 - Масштабирование (можешь запустить 3 копии Gateway вместо 1)
 - Более реалистично к production (в production также используют K8s)
 - Cilium дает видимость в то, как твои сервисы общаются
+
+---
+
+## Задание 3.2: Ingress Controller + Load Balancing
+
+### Что нужно?
+
+Ingress Controller — это **точка входа** в кластер (фронтовой門). Он слушает порт 80/443 и маршрутизирует HTTP/HTTPS запросы к нужным сервисам.
+
+**Аналогия для iOS:** 
+- Без Ingress = напрямую звонишь другу (знаешь номер)
+- С Ingress = звонишь оператору, он соединяет тебя с нужным человеком (оператор = Ingress)
+
+### Наша реализация
+
+Мы используем **Nginx** как простой Ingress Controller:
+
+```yaml
+# 10-ingress-controller.yaml
+
+upstream gateway {
+  server gateway.memehub.svc.cluster.local:8080;
+}
+
+server {
+  listen 80;
+  
+  location / {
+    proxy_pass http://gateway;  # Все запросы идут сюда
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+  }
+}
+```
+
+**Поток запроса:**
+```
+Пользователь (http://localhost/api/memes)
+    ↓
+Nginx Ingress (слушает порт 80)
+    ↓
+Маршрутизирует на Service: gateway.memehub.svc.cluster.local:8080
+    ↓
+K8s Service распределяет на pods Gateway
+    ↓
+Pod обрабатывает запрос
+```
+
+### Про Keepalived и HA
+
+**Keepalived** — это для высокой доступности (HA) когда у тебя несколько серверов.
+
+Пример HA архитектуры:
+```
+    Virtual IP: 192.168.1.100 (управляется Keepalived)
+           ↓
+    ┌──────┴──────┐
+    ↓             ↓
+Ingress #1    Ingress #2
+на Node 1      на Node 2
+
+Если Node 1 упадет → Virtual IP переключается на Node 2
+(пользователи не заметят)
+```
+
+**В нашем случае:** 
+- Docker Desktop = одна машина
+- Один Ingress достаточно
+- Keepalived не нужен (нему нечего failover'ить)
+
+Если бы хотели HA, пришлось бы:
+1. Запустить Keepalived деплоймент
+2. Настроить виртуальный IP через VRRP протокол
+3. Синхронизировать состояние между Ingress'ами
+
+Но это сложно на Docker Desktop, поэтому делаем просто.
+
+### Как применить
+
+```bash
+# Применить Ingress Controller
+kubectl apply -f 10-ingress-controller.yaml
+
+# Проверить статус
+kubectl get pods -n ingress-nginx
+kubectl get svc -n ingress-nginx
+
+# Проверить что работает
+kubectl port-forward -n ingress-nginx svc/nginx-ingress 8080:80
+
+# В другом терминале
+curl http://localhost:8080/api/memes
+```
+
+### Мониторинг load balancing
+
+Ingress распределяет запросы между pods (если их несколько):
+
+```bash
+# Запустить 3 копии Gateway
+kubectl scale deployment gateway -n memehub --replicas=3
+
+# Каждый запрос пойдет на другой pod (round-robin)
+for i in {1..10}; do
+  curl -s http://localhost:8080/api/memes | head -1
+done
+```
+
+### Итого по заданию 3.2
+
+✅ **Ingress Controller** — Nginx (простой, работающий)
+✅ **Load Balancing** — встроенный round-robin между pods
+✅ **Keepalived** — не нужен для одной машины (но архитектура описана выше)
