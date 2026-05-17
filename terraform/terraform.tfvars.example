@@ -1,0 +1,7 @@
+# Copy this file to terraform.tfvars and update values for your environment
+
+memehub_namespace    = "memehub"
+postgres_username    = "memehub"
+postgres_password    = "change-me-to-strong-password"
+minio_access_key     = "minioadmin"
+minio_secret_key     = "minioadmin"

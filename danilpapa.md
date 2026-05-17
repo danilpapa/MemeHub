@@ -468,3 +468,196 @@ done
 ✅ **Ingress Controller** — Nginx (простой, работающий)
 ✅ **Load Balancing** — встроенный round-robin между pods
 ✅ **Keepalived** — не нужен для одной машины (но архитектура описана выше)
+
+---
+
+## Задание 2.1: Terraform для инфраструктуры
+
+### Что такое Terraform?
+
+Terraform — это IaC (Infrastructure as Code). Вместо того чтобы кликать в UI или писать kubectl команды, ты описываешь нужную инфраструктуру в коде.
+
+**Аналогия для iOS:**
+- Без Terraform = вручную создавать Interface Builder в Xcode
+- С Terraform = писать SwiftUI код который создает UI
+
+### Наша структура
+
+```
+terraform/
+├── main.tf              # Конфиг провайдера
+├── namespaces.tf        # Создание memehub и ingress-nginx namespaces
+├── service_accounts.tf  # ServiceAccounts для gateway, ai-service, nginx-ingress
+├── secrets.tf           # Пароли и ключи (postgres, minio, redis, aws-s3)
+├── variables.tf         # Переменные (можно переопределять)
+├── outputs.tf           # Что вывести после создания
+├── terraform.tfvars     # Значения переменных (не коммитим!)
+└── README.md            # Инструкции
+```
+
+### Основные объекты
+
+#### 1. Namespace
+
+```hcl
+resource "kubernetes_namespace" "memehub" {
+  metadata {
+    name = "memehub"
+  }
+}
+```
+
+Это создает namespace (изоляция для ресурсов). Как создать новую папку в Xcode Project.
+
+#### 2. Service Account
+
+```hcl
+resource "kubernetes_service_account" "gateway" {
+  metadata {
+    name      = "gateway"
+    namespace = kubernetes_namespace.memehub.metadata[0].name
+  }
+}
+```
+
+Service Account — это "пользователь" для pod'ов. Pod использует SA для доступа к K8s API.
+
+#### 3. Secret
+
+```hcl
+resource "kubernetes_secret" "postgres" {
+  metadata {
+    name      = "postgres-credentials"
+    namespace = kubernetes_namespace.memehub.metadata[0].name
+  }
+
+  data = {
+    username = base64encode("memehub")
+    password = base64encode("memehub")
+  }
+}
+```
+
+Secret — это зашифрованные переменные окружения. Пароли, ключи, токены.
+
+#### 4. Role & RoleBinding (RBAC)
+
+```hcl
+resource "kubernetes_role" "nginx_ingress" {
+  metadata {
+    name = "nginx-ingress"
+  }
+
+  rule {
+    api_groups = [""]
+    resources  = ["configmaps"]
+    verbs      = ["get", "list", "watch"]
+  }
+}
+
+resource "kubernetes_role_binding" "nginx_ingress" {
+  # Привязываем Role к ServiceAccount
+  subject {
+    kind      = "ServiceAccount"
+    name      = kubernetes_service_account.nginx_ingress.metadata[0].name
+  }
+
+  role_ref {
+    kind = "Role"
+    name = kubernetes_role.nginx_ingress.metadata[0].name
+  }
+}
+```
+
+RBAC = Role-Based Access Control. Определяет что может делать каждый ServiceAccount.
+
+Например: "nginx-ingress может читать ConfigMaps, но не может удалять pods"
+
+### Как использовать
+
+#### Шаг 1: Инициализировать
+
+```bash
+cd terraform
+terraform init
+```
+
+Это скачивает провайдер Kubernetes и готовит всё.
+
+#### Шаг 2: Посмотреть план
+
+```bash
+terraform plan
+```
+
+Это показывает что будет создано, без применения.
+
+#### Шаг 3: Применить
+
+```bash
+terraform apply
+```
+
+Terraform создаст namespaces, service accounts, secrets.
+
+#### Шаг 4: Проверить
+
+```bash
+# Посмотреть outputs
+terraform output
+
+# Проверить в kubectl
+kubectl get namespaces
+kubectl get serviceaccount -n memehub
+kubectl get secrets -n memehub
+```
+
+### Зачем это нужно?
+
+**Docker Compose + kubectl:**
+- Нужно помнить какие команды писать
+- Сложно повторить на другой машине
+- Если что-то удалить — нужно вручную пересоздавать
+
+**С Terraform:**
+- Один файл = вся инфраструктура (reproducible)
+- Легко масштабировать (просто добавить в код)
+- История изменений в git
+- Можно использовать переменные
+
+### Пример: добавить еще один Service Account
+
+Просто добавить в `service_accounts.tf`:
+
+```hcl
+resource "kubernetes_service_account" "new_service" {
+  metadata {
+    name      = "new-service"
+    namespace = kubernetes_namespace.memehub.metadata[0].name
+  }
+}
+```
+
+И запустить:
+
+```bash
+terraform apply
+```
+
+Готово! Service Account создан.
+
+### Важное для production
+
+- **Не коммитить** `terraform.tfvars` (содержит пароли)
+- Использовать remote state (S3, TFC) вместо локального файла
+- Добавить `terraform.lock.hcl` в git
+- Использовать более сильные пароли
+
+### Итого по заданию 2.1
+
+✅ **Namespaces** — memehub, ingress-nginx созданы как код
+✅ **Service Accounts** — для всех компонентов
+✅ **Secrets** — для postgres, minio, redis, aws-s3
+✅ **RBAC** — простые роли для Nginx Ingress
+
+Все для галочки, просто и работает 👍
