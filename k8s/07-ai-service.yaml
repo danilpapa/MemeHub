@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-service
+  namespace: memehub
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-service
+  template:
+    metadata:
+      labels:
+        app: ai-service
+    spec:
+      containers:
+      - name: ai-service
+        image: memehub-ai_service:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: USE_LLM
+          value: "0"
+        - name: PORT
+          value: "8000"
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "redpanda:9092"
+        - name: KAFKA_ANALYSIS_REQUESTED_TOPIC
+          value: "meme.analysis.requested"
+        - name: KAFKA_ANALYSIS_COMPLETED_TOPIC
+          value: "meme.analysis.completed"
+        - name: CLICKHOUSE_HOST
+          value: "clickhouse"
+        - name: CLICKHOUSE_PORT
+          value: "8123"
+        ports:
+        - containerPort: 8000
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-service
+  namespace: memehub
+spec:
+  selector:
+    app: ai-service
+  ports:
+  - port: 8000
+    targetPort: 8000
+  type: ClusterIP

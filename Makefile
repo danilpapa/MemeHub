@@ -10,3 +10,9 @@ container:
 scratch:
 	@chmod +x scripts/open_docker.sh && ./scripts/open_docker.sh
 	@docker compose up --build
+
+check_cilium:
+	@kubectl get pods -n kube-system | grep ciliuma
+
+pods: 
+	@kubectl get pods -n memehub -w

@@ -1,0 +1,175 @@
+# Simplified Cilium Network Policies for MemeHub
+# Compatible with Cilium 1.15+
+
+---
+# Allow external traffic to gateway
+apiVersion: cilium.io/v2alpha1
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-gateway-external
+  namespace: memehub
+spec:
+  description: "Allow external traffic to gateway"
+  endpointSelector:
+    matchLabels:
+      app: gateway
+  ingress:
+  - fromEndpoints:
+    - {}
+    toPorts:
+    - ports:
+      - port: "8080"
+        protocol: TCP
+
+---
+# Allow gateway to reach ai-service
+apiVersion: cilium.io/v2alpha1
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-gateway-to-ai
+  namespace: memehub
+spec:
+  description: "Allow gateway to reach ai-service"
+  endpointSelector:
+    matchLabels:
+      app: ai-service
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: gateway
+    toPorts:
+    - ports:
+      - port: "8000"
+        protocol: TCP
+
+---
+# Allow gateway to reach redis
+apiVersion: cilium.io/v2alpha1
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-gateway-to-redis
+  namespace: memehub
+spec:
+  description: "Allow gateway to reach redis"
+  endpointSelector:
+    matchLabels:
+      app: redis
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: gateway
+    toPorts:
+    - ports:
+      - port: "6379"
+        protocol: TCP
+
+---
+# Allow gateway and ai-service to reach kafka
+apiVersion: cilium.io/v2alpha1
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-to-kafka
+  namespace: memehub
+spec:
+  description: "Allow gateway and ai-service to reach kafka"
+  endpointSelector:
+    matchLabels:
+      app: redpanda
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: gateway
+    - matchLabels:
+        app: ai-service
+    toPorts:
+    - ports:
+      - port: "9092"
+        protocol: TCP
+
+---
+# Allow gateway to reach postgres
+apiVersion: cilium.io/v2alpha1
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-gateway-to-postgres
+  namespace: memehub
+spec:
+  description: "Allow gateway to reach postgres"
+  endpointSelector:
+    matchLabels:
+      app: postgres
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: gateway
+    toPorts:
+    - ports:
+      - port: "5432"
+        protocol: TCP
+
+---
+# Allow gateway and ai-service to reach minio
+apiVersion: cilium.io/v2alpha1
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-to-minio
+  namespace: memehub
+spec:
+  description: "Allow gateway and ai-service to reach minio"
+  endpointSelector:
+    matchLabels:
+      app: minio
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: gateway
+    - matchLabels:
+        app: ai-service
+    toPorts:
+    - ports:
+      - port: "9000"
+        protocol: TCP
+
+---
+# Allow gateway and ai-service to reach clickhouse
+apiVersion: cilium.io/v2alpha1
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-to-clickhouse
+  namespace: memehub
+spec:
+  description: "Allow gateway and ai-service to reach clickhouse"
+  endpointSelector:
+    matchLabels:
+      app: clickhouse
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: gateway
+    - matchLabels:
+        app: ai-service
+    toPorts:
+    - ports:
+      - port: "8123"
+        protocol: TCP
+
+---
+# Allow gateway to reach jaeger
+apiVersion: cilium.io/v2alpha1
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-gateway-to-jaeger
+  namespace: memehub
+spec:
+  description: "Allow gateway to reach jaeger"
+  endpointSelector:
+    matchLabels:
+      app: jaeger
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: gateway
+    toPorts:
+    - ports:
+      - port: "4317"
+        protocol: TCP

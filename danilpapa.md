@@ -1,0 +1,357 @@
+## Что такое Kubernetes? (Простое объяснение)
+
+**Docker Compose vs Kubernetes:**
+- **Docker Compose** — это как запуск приложения на одном компьютере. Ты скачиваешь контейнеры и запускаешь `docker compose up`. Работает просто, но если сломается один контейнер, или компьютер перезагрузится — всё выломается.
+- **Kubernetes** — это как наймать менеджера проектов для твоих контейнеров. Менеджер следит, чтобы нужное количество копий приложения всегда работало, перезапускает упавшие контейнеры, распределяет нагрузку, обновляет версии без простоев.
+
+**Kubernetes кластер** состоит из:
+- **Master (Control Plane)** — мозг кластера, принимает команды, распределяет работу
+- **Worker Nodes** — рабочие, на которых крутятся контейнеры (в локальном режиме это один или два компьютера)
+
+## Что такое Cilium? (Сетевой управляющий)
+
+**CNI** (Container Network Interface) — это как сетевой "коммутатор" для контейнеров. Если у тебя есть 5 контейнеров на разных машинах, CNI следит, чтобы они друг друга видели и могли общаться.
+
+**Cilium** — это CNI на стероидах:
+- Обычно CNI работает на уровне IP-адресов (просто пробрасывает пакеты)
+- Cilium использует eBPF (extended Berkeley Packet Filter) — это как встроенная ОС прямо в ядро Linux, которая видит трафик на более глубоком уровне
+- Это позволяет Cilium делать умные вещи: обнаруживать атаки, видеть, какие сервисы разговаривают друг с другом, применять сетевые политики
+
+**В нашем случае:** Cilium поможет нам видеть трафик между Gateway → AI Service → Redpanda, применять политики (например, "только Gateway может обращаться в Kafka"), и отлавливать проблемы.
+
+## Варианты установки локального K8s
+
+### Вариант 1: k3s (Рекомендуется для начинающих) ⭐
+- **Что это:** Легкая версия Kubernetes от Rancher
+- **Плюсы:** Устанавливается в 10 команд, работает на macOS, Linux, WSL
+- **Минусы:** Немного упрощён, но для локальной разработки идеален
+- **Память:** 2-4 GB
+- **Скорость установки:** 2-3 минуты
+
+### Вариант 2: k0s
+- **Что это:** Ещё более минималистичный K8s
+- **Плюсы:** Меньше памяти, подходит для слабых машин
+- **Минусы:** Меньше документации, чем у k3s
+- **Память:** 1-2 GB
+
+### Вариант 3: Talos Linux (Сложный путь)
+- **Что это:** Полноценный K8s на специальной Linux ОС, заточенной под контейнеры
+- **Плюсы:** Максимальный контроль, как в production
+- **Минусы:** Нужна виртуальная машина (KVM/VirtualBox), сложнее настройка
+- **Память:** 4-8 GB
+- **Скорость установки:** 10-15 минут
+
+**Рекомендация:** Начни с **k3s** — это 80% того, что нужно, но 20% усилий.
+
+---
+
+## Установка k3s + Cilium на macOS
+
+### Шаг 1: Установка k3s
+
+```bash
+# Скачиваем и устанавливаем k3s (это просто один большой бинарник)
+curl -sfL https://get.k3s.io | sh -
+
+# Проверяем, что k3s запустился
+sudo k3s kubectl get nodes
+
+# Для удобства: скопируем конфиг Kubernetes в домашнюю папку
+mkdir -p ~/.kube
+sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+sudo chown $(id -u):$(id -g) ~/.kube/config
+
+# Теперь можешь использовать kubectl без sudo
+kubectl get nodes
+```
+
+**Что произошло:**
+- Скачалась готовая сборка Kubernetes
+- Автоматически поднялся Control Plane и Worker на одной машине
+- Создался конфиг-файл, который говорит `kubectl` (командной утилите), где находится кластер
+
+### Шаг 2: Отключение встроенного CNI
+
+По умолчанию k3s поставляется с Flannel CNI. Нам нужна Cilium.
+
+```bash
+# Переустанавливаем k3s БЕЗ встроенного CNI
+# Сначала стираем старую версию
+sudo /usr/local/bin/k3s-uninstall.sh
+
+# Переустанавливаем с флагом --flannel-backend=none
+curl -sfL https://get.k3s.io | INSTALL_K3S_SKIP_DOWNLOAD=false sh -s - --flannel-backend=none
+
+# Проверяем (노드будут в статусе NotReady — это нормально, ждём Cilium)
+kubectl get nodes
+```
+
+### Шаг 3: Установка Cilium
+
+```bash
+# Устанавливаем Helm (это пакетный менеджер для Kubernetes)
+brew install helm
+
+# Добавляем репозиторий Cilium
+helm repo add cilium https://helm.cilium.io
+helm repo update
+
+# Устанавливаем Cilium
+helm install cilium cilium/cilium \
+  --namespace kube-system \
+  --set kubeProxyReplacement=partial \
+  --set k3s.enabled=true
+
+# Проверяем, что Cilium установилась (может занять 1-2 минуты)
+kubectl get pods -n kube-system | grep cilium
+```
+
+**Что произошло:**
+- Cilium развернулась в `kube-system` namespace (системное пространство имён)
+- На каждом узле поднялась Cilium pod — это наши "сетевые менеджеры"
+
+### Шаг 4: Проверка кластера
+
+```bash
+# Проверяем, что все узлы Ready
+kubectl get nodes
+
+# Смотрим все системные поды (должны быть в Running)
+kubectl get pods -n kube-system
+
+# Смотрим Cilium специально
+kubectl get pods -n kube-system -l k8s-app=cilium
+```
+
+**Ожидаемый результат:**
+```
+NAME              STATUS   ROLES    
+k3s-master        Ready    master   
+
+NAMESPACE      NAME                          READY   STATUS    
+kube-system    cilium-xxx-yyyyy              1/1     Running   
+kube-system    cilium-operator-xxx           1/1     Running   
+```
+
+---
+
+## Развёртывание MemeHub в Kubernetes
+
+### Шаг 5: Создание Namespace
+
+Namespace — это как папка для проекта. Все сервисы MemeHub будут жить в одной папке.
+
+```bash
+kubectl create namespace memehub
+```
+
+### Шаг 6: Создание Deployment для каждого сервиса
+
+Теперь нам нужно создать файлы описания каждого сервиса. Создай папку для Kubernetes манифестов:
+
+```bash
+mkdir -p ./k8s
+```
+
+#### Redpanda (Kafka) deployment
+
+`./k8s/redpanda.yaml`:
+
+Что здесь происходит:
+- **ConfigMap** — конфигурация для Redpanda
+- **Deployment** — основной сервис Redpanda (1 реплика = 1 контейнер)
+- **Service** — "адрес" для связи с Redpanda (другие поды могут обращаться по имени `redpanda:9092`)
+- **Job** — одноразовая задача для создания Kafka topics
+
+#### 6.2 Redis deployment
+
+Создай файл `./k8s/redis.yaml`:
+
+#### 6.3 PostgreSQL deployment
+
+Создай файл `./k8s/postgres.yaml`:
+
+#### 6.4 MinIO deployment
+
+Создай файл `./k8s/minio.yaml`:
+
+#### 6.6 Jaeger deployment
+
+Создай файл `./k8s/jaeger.yaml`:
+
+#### 6.7 AI Service deployment
+
+Создай файл `./k8s/ai-service.yaml`:
+
+### Шаг 7: Развёртывание всех сервисов
+
+```bash
+# Применяем все манифесты
+kubectl apply -f ./k8s/
+
+# Проверяем, что всё развернулось
+kubectl get pods -n memehub
+
+# Ждём, пока все поды не будут в статусе Running (может занять 1-2 минуты)
+kubectl get pods -n memehub -w
+```
+
+---
+
+## Тестирование и доступ к сервисам
+
+### Проверка подов
+
+```bash
+# Смотрим статус всех подов
+kubectl get pods -n memehub
+
+# Смотрим логи конкретного пода (например, gateway)
+kubectl logs -n memehub -l app=gateway -f
+
+# Если что-то не работает, смотрим подробное описание пода
+kubectl describe pod -n memehub <pod-name>
+```
+
+### Доступ к UI сервисов
+
+```bash
+# Получаем IP адреса внешних сервисов
+kubectl get svc -n memehub
+
+# Пробрасываем порты для локального доступа
+kubectl port-forward -n memehub svc/gateway 8080:8080 &
+kubectl port-forward -n memehub svc/jaeger 16686:16686 &
+kubectl port-forward -n memehub svc/minio 9000:9000 9001:9001 &
+```
+
+Теперь доступ:
+- **Gateway:** `http://localhost:8080`
+- **Jaeger UI:** `http://localhost:16686`
+- **MinIO Console:** `http://localhost:9001` (admin/minioadmin)
+
+### Тестирование API
+
+```bash
+# Отправка задачи на анализ
+curl -X POST http://localhost:8080/ai/process \
+  -F "file=@/path/to/meme.png"
+
+# Проверка метрик
+curl http://localhost:8080/metrics
+
+# Проверка здоровья AI service
+kubectl port-forward -n memehub svc/ai-service 8000:8000 &
+curl http://localhost:8000/health
+```
+
+---
+
+## Сетевые политики Cilium
+
+Теперь, когда всё работает, можем настроить сетевые политики. Это как firewall для твоих микросервисов.
+
+### Базовая политика: запретить всё, кроме разрешённого
+
+Создай файл `./k8s/network-policies.yaml`:
+
+# Запретить весь входящий трафик по умолчанию
+# Разрешить Gateway принимать запросы (из вне кластера)
+# Разрешить Gateway → AI Service
+# Разрешить Gateway → Redis
+# Разрешить Gateway & AI Service → Kafka (Redpanda)
+# Разрешить Gateway → PostgreSQL
+# Разрешить Gateway & AI Service → MinIO
+# Разрешить Gateway & AI Service → ClickHouse
+# Разрешить Gateway → Jaeger
+
+Применяем политики:
+
+```bash
+kubectl apply -f ./k8s/network-policies.yaml
+```
+
+### Проверка политик
+
+```bash
+# Смотрим все сетевые политики
+kubectl get ciliumnetworkpolicies -n memehub
+
+# Смотрим подробно
+kubectl describe ciliumnetworkpolicies -n memehub
+```
+
+---
+
+## Мониторинг с Cilium Hubble
+
+Cilium имеет встроенный observability инструмент **Hubble**, который позволяет видеть трафик между подами.
+
+```bash
+# Включаем Hubble (if not already enabled)
+helm upgrade cilium cilium/cilium \
+  --namespace kube-system \
+  --reuse-values \
+  --set hubble.relay.enabled=true \
+  --set hubble.ui.enabled=true
+
+# Ждём, пока поднимутся hubble поды
+kubectl get pods -n kube-system -l k8s-app=hubble
+
+# Пробрасываем порт для UI
+kubectl port-forward -n kube-system svc/hubble-ui 8081:80 &
+
+# Откроем в браузере http://localhost:8081
+```
+
+**В Hubble UI ты сможешь видеть:**
+- Все connections между подами в реальном времени
+- Какие поды разговаривают с какими (зелёные=успешно, красные=ошибки)
+- Throughput (количество запросов в секунду)
+- DNS запросы
+
+---
+
+## Полезные команды
+
+```bash
+# Смотреть все ресурсы в namespace
+kubectl get all -n memehub
+
+# Смотреть события (что происходит)
+kubectl get events -n memehub --sort-by='.lastTimestamp'
+
+# Посмотреть переменные окружения пода
+kubectl exec -n memehub <pod-name> -- env
+
+# Войти в pod и выполнить команды
+kubectl exec -it -n memehub <pod-name> -- /bin/sh
+
+# Скопировать файл из пода
+kubectl cp memehub/<pod-name>:/app/file.txt ./file.txt
+
+# Удалить deployment (остановит все его поды)
+kubectl delete deployment -n memehub <deployment-name>
+
+# Перезапустить deployment
+kubectl rollout restart deployment -n memehub <deployment-name>
+
+# Смотреть логи в реальном времени
+kubectl logs -n memehub -l app=gateway -f
+
+# Смотреть использование ресурсов
+kubectl top pods -n memehub
+```
+
+**Что ты получил:**
+- ✅ Локальный K8s кластер (k3s + Cilium)
+- ✅ Все сервисы MemeHub развёрнуты в K8s
+- ✅ Сетевые политики (какие сервисы с какими общаются)
+- ✅ eBPF observability (Cilium Hubble видит весь трафик)
+- ✅ Трассировка (Jaeger) и метрики (Prometheus)
+
+**Главные преимущества перед Docker Compose:**
+- Автоматические рестарты падающих контейнеров
+- Масштабирование (можешь запустить 3 копии Gateway вместо 1)
+- Более реалистично к production (в production также используют K8s)
+- Cilium дает видимость в то, как твои сервисы общаются
