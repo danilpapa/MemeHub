@@ -1,0 +1,98 @@
+# Упрощённая инфраструктура MemeHub
+# Всё, что нужно для работы: Namespaces + Service Accounts + базовые Secrets
+
+---
+# 1. NAMESPACES - изолируем наши ресурсы
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: memehub
+  labels:
+    app: memehub
+
+---
+# 2. SERVICE ACCOUNTS - "пользователи" для pods
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gateway
+  namespace: memehub
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ai-service
+  namespace: memehub
+
+---
+# 3. ROLES + ROLEBINDINGS - права доступа (RBAC)
+# Gateway может читать/обновлять ConfigMaps (для конфигурации)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gateway-role
+  namespace: memehub
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gateway-rolebinding
+  namespace: memehub
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: gateway-role
+subjects:
+  - kind: ServiceAccount
+    name: gateway
+    namespace: memehub
+
+---
+# 4. SECRETS - зашифрованное хранилище паролей
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-credentials
+  namespace: memehub
+type: Opaque
+data:
+  username: bWVtZWh1Yg==  # base64: memehub
+  password: bWVtZWh1Yg==  # base64: memehub
+  database: bWVtZWh1Yg==  # base64: memehub
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: redis-credentials
+  namespace: memehub
+type: Opaque
+data:
+  password: cmVkaXM=  # base64: redis
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-credentials
+  namespace: memehub
+type: Opaque
+data:
+  access_key: bWluaW9hZG1pbg==  # base64: minioadmin
+  secret_key: bWluaW9hZG1pbg==  # base64: minioadmin
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kafka-credentials
+  namespace: memehub
+type: Opaque
+data:
+  bootstrap_servers: bG9jYWxob3N0OjE5MDky  # base64: localhost:19092

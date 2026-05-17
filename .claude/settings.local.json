@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(xargs ls *)"
+      "Bash(xargs ls *)",
+      "Bash(docker-compose logs *)",
+      "Bash(docker-compose up *)",
+      "Bash(docker-compose ps *)"
     ]
   }
 }

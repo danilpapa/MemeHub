@@ -1,0 +1,87 @@
+# Gateway deployment в Kubernetes
+# Развёртывает наше приложение
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: memehub
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gateway
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      serviceAccountName: gateway
+      containers:
+      - name: gateway
+        image: gateway:latest  # локальный образ
+        imagePullPolicy: Never  # не скачивать, использовать локальный
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "localhost:19092"  # подключаемся к Docker хосту
+        - name: REDIS_URL
+          value: "redis://localhost:6379"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://localhost:4317"
+        - name: AI_SERVICE_URL
+          value: "http://localhost:8000"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+---
+# Service - "адрес" для обращения к Gateway
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: memehub
+spec:
+  selector:
+    app: gateway
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+  type: ClusterIP
+
+---
+# Ingress - маршрутизация внешних запросов
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gateway-ingress
+  namespace: memehub
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: gateway
+            port:
+              number: 8080
